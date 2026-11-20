@@ -1,0 +1,7 @@
+services:
+  bot:
+    build: .
+    container_name: invenia-bot
+    restart: unless-stopped
+    env_file:
+      - .env

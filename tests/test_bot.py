@@ -25,7 +25,7 @@ class StatsAndButtonsTest(unittest.TestCase):
         full = resolve("Кредит на машину оформите")
         message, buttons = render(full)
         self.assertEqual(buttons, [])
-        self.assertIn("не буду", message.lower())
+        self.assertIn("не помогу", message.lower())
 
     def test_direct_answer_comes_from_faq(self):
         full = resolve("Скока денег на счету?")
@@ -42,7 +42,7 @@ class StatsAndButtonsTest(unittest.TestCase):
             "mode": "buttons",
         }
         message, buttons = render(full)
-        self.assertIn("не уверен", message.lower())
+        self.assertIn("уточните", message.lower())
         self.assertEqual(len(buttons), 3)
         self.assertEqual(buttons[0][0]["callback_data"], "1:ru")
 

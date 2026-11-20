@@ -1,3 +1,4 @@
+numpy==2.0.2
 rapidfuzz==3.14.6
 scikit-learn==1.9.1
 Flask==3.1.2
