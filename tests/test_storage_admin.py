@@ -8,6 +8,7 @@ from bot.admin_app import create_app
 from bot.dialog import reset
 from bot.service import process_incoming
 from bot.storage import get_messages, list_chats, update_chat
+from bot.telegram_bot import _handle_text
 
 
 class StorageAndAdminTest(unittest.TestCase):
@@ -72,6 +73,41 @@ class StorageAndAdminTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         send.assert_called_once_with("telegram", "88", "Ответ оператора")
         self.assertEqual(get_messages(chat["id"])[-1]["sender"], "operator")
+
+    def test_live_telegram_handler_sends_and_saves_only_once(self):
+        with (
+            patch("bot.telegram_bot._send") as send,
+            patch("bot.telegram_bot.gemini_rephrase", side_effect=lambda _q, answer, _lang: answer),
+        ):
+            _handle_text(
+                "token",
+                901,
+                "Как проверить баланс?",
+                display_name="Telegram User",
+                message_id="telegram:901:1",
+            )
+        send.assert_called_once()
+        chat = list_chats()[0]
+        messages = get_messages(chat["id"])
+        self.assertEqual([row["sender"] for row in messages], ["customer", "bot"])
+
+    def test_live_telegram_operator_request_is_handed_off_once(self):
+        with (
+            patch("bot.telegram_bot._send") as send,
+            patch("bot.telegram_bot.gemini_rephrase", side_effect=lambda _q, answer, _lang, **_kw: answer),
+        ):
+            _handle_text(
+                "token",
+                902,
+                "Позовите оператора",
+                display_name="Telegram User",
+                message_id="telegram:902:1",
+            )
+        send.assert_called_once()
+        chat = list_chats()[0]
+        self.assertEqual(chat["status"], "needs_human")
+        self.assertEqual(chat["bot_enabled"], 0)
+        self.assertEqual(len(get_messages(chat["id"])), 2)
 
     def test_whatsapp_webhook_verification(self):
         previous = os.environ.get("WHATSAPP_VERIFY_TOKEN")

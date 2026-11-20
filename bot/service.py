@@ -48,6 +48,7 @@ def process_incoming(
     display_name: str = "",
     username: str = "",
     external_message_id: str | None = None,
+    transform=None,
 ) -> dict:
     """Сохраняет входящее сообщение, запускает FAQ и готовит автоответ."""
     chat = ensure_chat(channel, external_id, display_name, username)
@@ -66,6 +67,8 @@ def process_incoming(
         set_topic(memory_key, int(chat["current_topic"]))
     full = resolve(text, chat_id=memory_key)
     message, buttons = render_response(full)
+    if transform is not None and full["mode"] == "direct" and full["faq_id"] is not None:
+        message = transform(text, message, full["lang"])
 
     status = "needs_human" if full["mode"] == "refuse" else "open"
     changes = {"language": full["lang"], "status": status}
@@ -88,7 +91,13 @@ def process_incoming(
     }
 
 
-def select_faq(channel: str, external_id: str, faq_id: int, lang: str) -> dict:
+def select_faq(
+    channel: str,
+    external_id: str,
+    faq_id: int,
+    lang: str,
+    transform=None,
+) -> dict:
     chat = ensure_chat(channel, external_id, language=lang)
     if faq_id not in faq_by_id():
         raise ValueError("Неизвестная тема FAQ")
@@ -96,5 +105,7 @@ def select_faq(channel: str, external_id: str, faq_id: int, lang: str) -> dict:
     set_topic(memory_key, faq_id)
     update_chat(chat["id"], current_topic=faq_id, language=lang, status="open")
     message = phrase(faq_id, lang, "answer")
+    if transform is not None:
+        message = transform("", message, lang)
     add_message(chat["id"], "outbound", "bot", message, mode="selected")
     return {"chat": chat, "message": message}

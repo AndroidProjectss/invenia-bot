@@ -39,6 +39,14 @@ python main.py start
 
 Панель откроется на `http://127.0.0.1:8080`. Проверка состояния доступна без авторизации на `/health`.
 
+Через Docker всё также запускается одной командой:
+
+```bash
+docker compose up --build
+```
+
+Compose запускает админку, WhatsApp webhook и Telegram в одном контейнере, публикует порт админки и сохраняет SQLite-базу в `data/`.
+
 ## Telegram
 
 Добавьте токен и Telegram ID операторов:

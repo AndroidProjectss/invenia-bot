@@ -21,12 +21,9 @@ from bot.dialog import (
 )
 from bot.envfile import load_dotenv
 from bot.gemini import rephrase as gemini_rephrase
-from bot.channels import send_telegram
-from bot.corpus import ROOT, faq_by_id
-from bot.dialog import reset
 from bot.service import process_incoming, select_faq
 from bot.stats import log_unanswered, summary
-from bot.storage import add_message, ensure_chat
+from bot.storage import add_message, ensure_chat, update_chat
 from bot.textutil import basic_normalize
 
 _REFUSE = {
@@ -50,8 +47,6 @@ _HELLO = (
     "Здравствуйте! Это поддержка Invenia. Напишите вопрос на русском или кыргызском.\n"
     "Саламатсызбы! Бул Invenia колдоо кызматы. Суроону орусча же кыргызча жазыңыз.\n"
     "/reset — забыть тему текущего диалога."
-    "Здравствуйте. Напишите вопрос по связи на русском или кыргызском.\n"
-    "Саламатсызбы. Байланыш боюнча суроону орусча же кыргызча жазыңыз."
 )
 _RESET = "Тема этого чата забыта. Бот снова отвечает."
 
@@ -147,25 +142,12 @@ def _api(token: str, method: str, payload: dict | None = None, timeout: float = 
 
 
 def _send(token: str, chat_id: int | str, text: str, buttons: list[dict]) -> None:
-    normalized = []
-    for row in buttons:
-        button = row[0]
-        raw = button.get("callback_data", "")
-        raw_id, lang = raw.split(":", 1) if ":" in raw else ("", "ru")
-        if raw_id.isdigit():
-            normalized.append({"id": int(raw_id), "lang": lang, "text": button["text"]})
-    send_telegram(str(chat_id), text, normalized)
     payload: dict = {"chat_id": chat_id, "text": text}
     if buttons:
         payload["reply_markup"] = {"inline_keyboard": buttons}
     _api(token, "sendMessage", payload, timeout=15)
 
 
-def _handle_text(token: str, chat_id: int, text: str) -> None:
-    print(f"вопрос: {text}", flush=True)
-    drafts = compose(str(chat_id), text)
-    if not drafts:
-        print("бот молчит: диалог у оператора", flush=True)
 def _handle_text(
     token: str,
     chat_id: int,
@@ -174,20 +156,21 @@ def _handle_text(
     username: str = "",
     message_id: str | None = None,
 ) -> None:
+    print(f"вопрос: {text}", flush=True)
+    chat = ensure_chat("telegram", str(chat_id), display_name, username)
     if text.startswith("/start"):
+        add_message(chat["id"], "inbound", "customer", text, external_message_id=message_id)
+        add_message(chat["id"], "outbound", "bot", _HELLO, mode="command")
         _send(token, chat_id, _HELLO, [])
         return
     if text.startswith("/reset"):
         reset(str(chat_id))
-        _send(token, chat_id, "Тема этого чата забыта. Задайте вопрос заново.", [])
+        reset(f"telegram:{chat_id}")
+        add_message(chat["id"], "inbound", "customer", text, external_message_id=message_id)
+        add_message(chat["id"], "outbound", "bot", _RESET, mode="command")
+        update_chat(chat["id"], status="open", bot_enabled=1, current_topic=None)
+        _send(token, chat_id, _RESET, [])
         return
-    for message, buttons in drafts:
-        _send(token, chat_id, message, buttons)
-        if buttons:
-            labels = "; ".join(row[0]["text"] for row in buttons)
-            print(f"ответ: {message} | кнопки: {labels}", flush=True)
-        else:
-            print(f"ответ: {message}", flush=True)
     if text.startswith("/stats"):
         admins = {item.strip() for item in os.environ.get("TELEGRAM_ADMIN_IDS", "").split(",") if item.strip()}
         if str(chat_id) not in admins:
@@ -195,6 +178,32 @@ def _handle_text(
             return
         _send(token, chat_id, summary(), [])
         return
+
+    if not chat["bot_enabled"]:
+        add_message(
+            chat["id"], "inbound", "customer", text,
+            external_message_id=message_id,
+        )
+        update_chat(chat["id"], status="needs_human")
+        keep_for_operator(f"telegram:{chat_id}", text)
+        print("бот молчит: диалог у оператора", flush=True)
+        return
+
+    if operator_requested(text):
+        saved = add_message(
+            chat["id"], "inbound", "customer", text,
+            external_message_id=message_id,
+        )
+        if saved is None:
+            return
+        drafts = compose(f"telegram:{chat_id}", text)
+        for message, buttons in drafts:
+            add_message(chat["id"], "outbound", "bot", message, mode="handoff")
+            _send(token, chat_id, message, buttons)
+            print(f"ответ: {message}", flush=True)
+        update_chat(chat["id"], status="needs_human", bot_enabled=0, current_topic=14)
+        return
+
     result = process_incoming(
         "telegram",
         str(chat_id),
@@ -202,6 +211,7 @@ def _handle_text(
         display_name=display_name,
         username=username,
         external_message_id=message_id,
+        transform=gemini_rephrase,
     )
     if result.get("duplicate") or not result.get("send"):
         return
@@ -212,6 +222,7 @@ def _handle_text(
         for item in result["buttons"]
     ]
     _send(token, chat_id, result["message"], rows)
+    print(f"ответ: {result['message']}", flush=True)
 
 
 def _handle_callback(token: str, callback: dict) -> None:
@@ -240,11 +251,11 @@ def _handle_callback(token: str, callback: dict) -> None:
         return
     chat_row = ensure_chat("telegram", str(chat_id), language=lang)
     add_message(chat_row["id"], "inbound", "customer", phrase(faq_id, lang, "question"), mode="selection")
-    result = select_faq("telegram", str(chat_id), faq_id, lang)
+    result = select_faq(
+        "telegram", str(chat_id), faq_id, lang,
+        transform=gemini_rephrase,
+    )
     _send(token, chat_id, result["message"], [])
-    set_topic(str(chat_id), faq_id)
-    official = phrase(faq_id, lang, "answer")
-    _send(token, chat_id, gemini_rephrase("", official, lang), [])
 
 
 def bot_username(token: str) -> str:
@@ -284,27 +295,22 @@ def run_bot() -> None:
             continue
         for update in payload.get("result", []):
             offset = int(update["update_id"]) + 1
-            if "message" in update and update["message"].get("text"):
-                message = update["message"]
-                chat_id = message["chat"]["id"]
-                sender = message.get("from") or {}
-                name = " ".join(
-                    part for part in (sender.get("first_name", ""), sender.get("last_name", "")) if part
-                )
-                _handle_text(
-                    token,
-                    chat_id,
-                    message["text"],
-                    display_name=name,
-                    username=sender.get("username", ""),
-                    message_id=f"telegram:{chat_id}:{message.get('message_id')}",
-                )
-            elif "callback_query" in update:
-                _handle_callback(token, update["callback_query"])
             try:
                 if "message" in update and update["message"].get("text"):
-                    chat_id = update["message"]["chat"]["id"]
-                    _handle_text(token, chat_id, update["message"]["text"])
+                    message = update["message"]
+                    chat_id = message["chat"]["id"]
+                    sender = message.get("from") or {}
+                    name = " ".join(
+                        part for part in (sender.get("first_name", ""), sender.get("last_name", "")) if part
+                    )
+                    _handle_text(
+                        token,
+                        chat_id,
+                        message["text"],
+                        display_name=name,
+                        username=sender.get("username", ""),
+                        message_id=f"telegram:{chat_id}:{message.get('message_id')}",
+                    )
                 elif "callback_query" in update:
                     _handle_callback(token, update["callback_query"])
             except Exception:
