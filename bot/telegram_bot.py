@@ -203,7 +203,7 @@ def run_bot() -> None:
     except (urllib.error.URLError, RuntimeError, json.JSONDecodeError) as error:
         raise SystemExit(f"Telegram не ответил на getMe: {error}") from error
     offset = 0
-    print(f"Бот @{username} слушает Telegram. Остановка: Ctrl+C.")
+    print(f"Бот @{username} слушает Telegram. Остановка: Ctrl+C.", flush=True)
     while True:
         try:
             payload = _api(token, "getUpdates", {"timeout": 10, "offset": offset}, timeout=20)
