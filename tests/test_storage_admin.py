@@ -13,7 +13,7 @@ from bot.telegram_bot import _handle_text
 
 class StorageAndAdminTest(unittest.TestCase):
     def setUp(self):
-        self.folder = tempfile.TemporaryDirectory()
+        self.folder = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.addCleanup(self.folder.cleanup)
         self.previous_db = os.environ.get("BOT_DB_PATH")
         os.environ["BOT_DB_PATH"] = str(Path(self.folder.name) / "test.sqlite3")
