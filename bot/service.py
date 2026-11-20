@@ -139,7 +139,7 @@ def process_incoming(
         update_chat(chat["id"], status="needs_human")
         return {"duplicate": False, "chat": chat, "send": False, "full": full}
 
-    add_message(chat["id"], "outbound", "bot", message, mode=full["mode"])
+    outbound = add_message(chat["id"], "outbound", "bot", message, mode=full["mode"])
     return {
         "duplicate": False,
         "chat": chat,
@@ -147,6 +147,7 @@ def process_incoming(
         "full": full,
         "message": message,
         "buttons": buttons,
+        "outbound_id": outbound["id"],
     }
 
 
@@ -166,5 +167,5 @@ def select_faq(
     message = phrase(faq_id, lang, "answer")
     if transform is not None and get_setting_bool("rag_enabled"):
         message = transform("", message, lang)
-    add_message(chat["id"], "outbound", "bot", message, mode="selected")
-    return {"chat": chat, "message": message}
+    outbound = add_message(chat["id"], "outbound", "bot", message, mode="selected")
+    return {"chat": chat, "message": message, "outbound_id": outbound["id"]}

@@ -28,6 +28,8 @@ from bot.storage import (
     get_setting_bool,
     set_setting,
     update_chat,
+    record_delivery,
+    receive_delivery,
 )
 
 
@@ -66,6 +68,14 @@ def create_app(test_config: dict | None = None) -> Flask:
     @app.get("/health")
     def health():
         return {"status": "ok", "service": "invenia-admin"}
+
+    @app.get("/api/channels/whatsapp")
+    @login_required
+    def whatsapp_configuration():
+        keys = ("WHATSAPP_ACCESS_TOKEN", "WHATSAPP_PHONE_NUMBER_ID", "WHATSAPP_VERIFY_TOKEN", "WHATSAPP_APP_SECRET")
+        missing = [key for key in keys if not os.environ.get(key, "").strip()]
+        return {"configured": not missing, "missing": missing,
+                "webhook": "/webhooks/whatsapp"}
 
     @app.route("/login", methods=["GET", "POST"])
     def login():
@@ -142,11 +152,14 @@ def create_app(test_config: dict | None = None) -> Flask:
             flash("Ответ не может быть пустым.", "error")
         else:
             try:
-                send_channel(chat["channel"], chat["external_id"], text)
+                response = send_channel(chat["channel"], chat["external_id"], text)
             except Exception as error:  # сообщение показывается оператору, процесс не падает
                 flash(f"Не удалось отправить: {error}", "error")
             else:
-                add_message(chat_id, "outbound", "operator", text, mode="manual")
+                outbound = add_message(chat_id, "outbound", "operator", text, mode="manual")
+                if chat["channel"] == "whatsapp":
+                    provider_id = (response.get("messages") or [{}])[0].get("id")
+                    record_delivery(outbound["id"], "accepted", provider_id)
                 update_chat(chat_id, status="open", bot_enabled=0)
                 flash("Ответ отправлен. Автоответ для диалога приостановлен.", "success")
         return redirect(url_for("dashboard", chat=chat_id))
@@ -189,6 +202,14 @@ def create_app(test_config: dict | None = None) -> Flask:
             abort(403)
         payload = request.get_json(silent=True) or {}
         for value in _whatsapp_values(payload):
+            for receipt in value.get("statuses", []):
+                errors = receipt.get("errors") or []
+                detail = "; ".join(
+                    f"{item.get('code', '')}: {item.get('title', '')} "
+                    f"{(item.get('error_data') or {}).get('details', '')}"
+                    for item in errors
+                )
+                receive_delivery(receipt.get("id", ""), receipt.get("status", "unknown"), detail)
             names = {
                 contact.get("wa_id"): (contact.get("profile") or {}).get("name", "")
                 for contact in value.get("contacts", [])
@@ -232,7 +253,17 @@ def create_app(test_config: dict | None = None) -> Flask:
                     external_message_id=message.get("id"),
                 )
                 if result.get("send"):
-                    send_whatsapp(sender, result["message"], result["buttons"])
+                    outbound_id = result["outbound_id"]
+                    record_delivery(outbound_id, "sending")
+                    try:
+                        response = send_whatsapp(sender, result["message"], result["buttons"])
+                    except Exception as error:
+                        record_delivery(outbound_id, "failed", error=str(error))
+                        update_chat(result["chat"]["id"], status="needs_human")
+                        app.logger.error("WhatsApp send failed for message %s: %s", outbound_id, error)
+                    else:
+                        provider_id = (response.get("messages") or [{}])[0].get("id")
+                        record_delivery(outbound_id, "accepted", provider_id)
         return {"status": "ok"}
 
     return app
@@ -272,7 +303,14 @@ def _handle_whatsapp_faq(sender: str, name: str, message: dict, button: dict) ->
     if saved is None:
         return
     result = select_faq("whatsapp", sender, faq_id, lang)
-    send_whatsapp(sender, result["message"])
+    try:
+        response = send_whatsapp(sender, result["message"])
+    except Exception as error:
+        record_delivery(result["outbound_id"], "failed", error=str(error))
+        update_chat(chat["id"], status="needs_human")
+    else:
+        provider_id = (response.get("messages") or [{}])[0].get("id")
+        record_delivery(result["outbound_id"], "accepted", provider_id)
 
 
 def run_admin() -> None:

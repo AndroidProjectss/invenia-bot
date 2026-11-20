@@ -5,6 +5,11 @@ from __future__ import annotations
 import json
 import os
 import urllib.request
+import urllib.error
+
+
+class ChannelError(RuntimeError):
+    pass
 
 
 def _json_request(url: str, payload: dict, headers: dict | None = None) -> dict:
@@ -14,8 +19,20 @@ def _json_request(url: str, payload: dict, headers: dict | None = None) -> dict:
         data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
         headers=request_headers,
     )
-    with urllib.request.urlopen(request, timeout=40) as response:
-        return json.loads(response.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(request, timeout=40) as response:
+            result = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as error:
+        try:
+            detail = json.loads(error.read().decode("utf-8")).get("error", {})
+            code = detail.get("code", error.code)
+            message = detail.get("message", "Ошибка API канала")
+        except (ValueError, AttributeError):
+            code, message = error.code, "Ошибка API канала"
+        raise ChannelError(f"API {code}: {message}") from None
+    if result.get("error"):
+        raise ChannelError("API канала вернул ошибку")
+    return result
 
 
 def send_telegram(chat_id: str, text: str, buttons: list[dict] | None = None) -> dict:
@@ -68,11 +85,14 @@ def send_whatsapp(recipient: str, text: str, buttons: list[dict] | None = None) 
     else:
         payload.update({"type": "text", "text": {"preview_url": False, "body": text}})
     version = os.environ.get("WHATSAPP_GRAPH_VERSION", "v21.0").strip()
-    return _json_request(
+    result = _json_request(
         f"https://graph.facebook.com/{version}/{phone_number_id}/messages",
         payload,
         {"Authorization": f"Bearer {token}"},
     )
+    if not result.get("messages") or not result["messages"][0].get("id"):
+        raise ChannelError("WhatsApp не подтвердил приём сообщения")
+    return result
 
 
 def download_whatsapp_media(media_id: str) -> tuple[bytes, str]:

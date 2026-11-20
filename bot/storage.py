@@ -6,6 +6,7 @@ import os
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
+from contextlib import contextmanager
 
 from bot.corpus import DATA
 
@@ -15,14 +16,19 @@ def database_path() -> Path:
     return Path(configured).expanduser() if configured else DATA / "invenia.sqlite3"
 
 
-def _connect() -> sqlite3.Connection:
+@contextmanager
+def _connect():
     path = database_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(path, timeout=15)
     connection.row_factory = sqlite3.Row
-    connection.execute("PRAGMA foreign_keys = ON")
-    connection.execute("PRAGMA journal_mode = WAL")
-    return connection
+    try:
+        connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute("PRAGMA journal_mode = WAL")
+        with connection:
+            yield connection
+    finally:
+        connection.close()
 
 
 def _now() -> str:
@@ -67,6 +73,12 @@ def init_db() -> None:
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL,
                 updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS deliveries (
+                message_id INTEGER PRIMARY KEY REFERENCES messages(id),
+                provider_id TEXT UNIQUE,
+                status TEXT NOT NULL,
+                error TEXT NOT NULL DEFAULT ''
             );
             """
         )
@@ -142,7 +154,8 @@ def update_chat(chat_id: int, **fields) -> None:
     selected = {key: value for key, value in fields.items() if key in allowed}
     if not selected:
         return
-    selected["updated_at"] = _now()
+    if set(selected) != {"unread_count"}:
+        selected["updated_at"] = _now()
     assignments = ", ".join(f"{key} = ?" for key in selected)
     with _connect() as db:
         db.execute(
@@ -190,10 +203,28 @@ def list_chats(status: str = "", channel: str = "", query: str = "") -> list[dic
 def get_messages(chat_id: int) -> list[dict]:
     with _connect() as db:
         rows = db.execute(
-            "SELECT * FROM messages WHERE chat_id = ? ORDER BY id",
+            "SELECT m.*, d.status AS delivery_status, d.error AS delivery_error "
+            "FROM messages m LEFT JOIN deliveries d ON d.message_id = m.id "
+            "WHERE m.chat_id = ? ORDER BY m.id",
             (chat_id,),
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+def record_delivery(message_id: int, status: str, provider_id: str | None = None, error: str = "") -> None:
+    with _connect() as db:
+        db.execute(
+            "INSERT INTO deliveries(message_id, provider_id, status, error) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(message_id) DO UPDATE SET status=excluded.status, "
+            "provider_id=COALESCE(excluded.provider_id, deliveries.provider_id), error=excluded.error",
+            (message_id, provider_id, status, error[:1000]),
+        )
+
+
+def receive_delivery(provider_id: str, status: str, error: str = "") -> None:
+    with _connect() as db:
+        db.execute("UPDATE deliveries SET status=?, error=? WHERE provider_id=?",
+                   (status, error[:1000], provider_id))
 
 
 def dashboard_stats() -> dict:
