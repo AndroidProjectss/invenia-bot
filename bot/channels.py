@@ -75,6 +75,22 @@ def send_whatsapp(recipient: str, text: str, buttons: list[dict] | None = None) 
     )
 
 
+def download_whatsapp_media(media_id: str) -> tuple[bytes, str]:
+    token = os.environ.get("WHATSAPP_ACCESS_TOKEN", "").strip()
+    if not token or not media_id:
+        raise RuntimeError("Не удалось скачать файл WhatsApp")
+    version = os.environ.get("WHATSAPP_GRAPH_VERSION", "v21.0").strip()
+    request = urllib.request.Request(
+        f"https://graph.facebook.com/{version}/{media_id}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    with urllib.request.urlopen(request, timeout=40) as response:
+        meta = json.loads(response.read().decode("utf-8"))
+    file_request = urllib.request.Request(meta["url"], headers={"Authorization": f"Bearer {token}"})
+    with urllib.request.urlopen(file_request, timeout=40) as response:
+        return response.read(), meta.get("mime_type") or "application/octet-stream"
+
+
 def send_channel(channel: str, recipient: str, text: str, buttons: list[dict] | None = None) -> dict:
     if channel == "telegram":
         return send_telegram(recipient, text, buttons)

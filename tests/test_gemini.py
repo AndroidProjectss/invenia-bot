@@ -3,7 +3,8 @@ import os
 import unittest
 from unittest.mock import patch
 
-from bot.gemini import grounded, rephrase
+from bot.gemini import grounded, read_media, rephrase
+from bot.media import telegram_attachment, whatsapp_attachment
 
 
 _OFFICIAL = "Наберите *100#. Проверка бесплатная."
@@ -49,6 +50,27 @@ class GeminiRephraseTest(unittest.TestCase):
         text = rephrase("баланс", _OFFICIAL, "ru", transport=model)
         self.assertIn("*100#", text)
         self.assertNotEqual(text, _OFFICIAL)
+
+    def test_voice_file_becomes_question_text(self):
+        def transport(parts):
+            self.assertEqual(parts[0]["inline_data"]["mime_type"], "audio/ogg")
+            self.assertIn("дословно", parts[1]["text"])
+            return "Как проверить баланс?"
+
+        text = read_media(b"ogg", "audio/ogg", "voice", transport=transport)
+        self.assertEqual(text, "Как проверить баланс?")
+
+    def test_unreadable_file_is_empty(self):
+        self.assertEqual(read_media(b"png", "image/png", "image", transport=lambda parts: ""), "")
+        self.assertEqual(read_media(b"", "image/png", "image"), "")
+
+    def test_attachment_kinds(self):
+        voice = telegram_attachment({"voice": {"file_id": "v1"}})
+        photo = telegram_attachment({"photo": [{"file_id": "small"}, {"file_id": "big"}]})
+        document = whatsapp_attachment({"document": {"id": "d1", "mime_type": "application/pdf"}})
+        self.assertEqual(voice[2], "voice")
+        self.assertEqual(photo[0], "big")
+        self.assertEqual(document[2], "document")
 
     def test_bad_json_shape_returns_official(self):
         def model(prompt):
