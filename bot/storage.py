@@ -62,6 +62,12 @@ def init_db() -> None:
 
             CREATE INDEX IF NOT EXISTS idx_chats_updated ON chats(updated_at DESC);
             CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages(chat_id, id);
+
+            CREATE TABLE IF NOT EXISTS app_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
             """
         )
 
@@ -207,3 +213,34 @@ def dashboard_stats() -> dict:
         "telegram": telegram,
         "whatsapp": whatsapp,
     }
+
+
+def get_setting(key: str, default: str = "") -> str:
+    init_db()
+    with _connect() as db:
+        row = db.execute(
+            "SELECT value FROM app_settings WHERE key = ?",
+            (key,),
+        ).fetchone()
+    return str(row["value"]) if row else default
+
+
+def get_setting_bool(key: str, default: bool = False) -> bool:
+    value = get_setting(key, "1" if default else "0").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
+def set_setting(key: str, value: str | bool | int) -> None:
+    init_db()
+    normalized = "1" if value is True else "0" if value is False else str(value)
+    with _connect() as db:
+        db.execute(
+            """
+            INSERT INTO app_settings (key, value, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET
+                value = excluded.value,
+                updated_at = excluded.updated_at
+            """,
+            (key, normalized, _now()),
+        )

@@ -12,6 +12,7 @@ from flask import Flask, abort, flash, redirect, render_template, request, sessi
 
 from bot.channels import send_channel, send_whatsapp
 from bot.corpus import ROOT
+from bot.rag import summary as rag_summary
 from bot.service import process_incoming, select_faq
 from bot.storage import (
     add_message,
@@ -21,6 +22,8 @@ from bot.storage import (
     get_messages,
     init_db,
     list_chats,
+    get_setting_bool,
+    set_setting,
     update_chat,
 )
 
@@ -103,8 +106,27 @@ def create_app(test_config: dict | None = None) -> Flask:
             selected=selected,
             messages=messages,
             stats=dashboard_stats(),
+            knowledge={**rag_summary(), "enabled": get_setting_bool("rag_enabled")},
             filters={"status": status, "channel": channel, "q": query},
         )
+
+    @app.post("/settings/knowledge-base")
+    @login_required
+    def toggle_knowledge_base():
+        info = rag_summary()
+        enabled = request.form.get("enabled") == "1"
+        if enabled and not info["available"]:
+            flash("Файл полной базы знаний не найден.", "error")
+        elif enabled and not info["records"]:
+            flash("В полной базе знаний нет активных проверенных записей.", "error")
+        else:
+            set_setting("rag_enabled", enabled)
+            if enabled:
+                flash(f"Полная база знаний включена: {info['records']} записей.", "success")
+            else:
+                flash("Включён конкурсный FAQ-режим.", "success")
+        raw_chat = request.form.get("chat", "")
+        return redirect(url_for("dashboard", chat=raw_chat if raw_chat.isdigit() else None))
 
     @app.post("/chats/<int:chat_id>/reply")
     @login_required

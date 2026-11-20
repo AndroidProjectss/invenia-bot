@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import os
+
 from bot.answer import resolve
 from bot.corpus import faq_by_id
 from bot.dialog import set_topic
-from bot.storage import add_message, ensure_chat, update_chat
+from bot.rag import resolve as resolve_rag
+from bot.storage import add_message, ensure_chat, get_setting_bool, update_chat
 
 REFUSE = {
     "ru": "В базе Invenia пока нет ответа на этот вопрос. Я передал диалог оператору.",
@@ -25,6 +28,8 @@ def phrase(faq_id: int, lang: str, field: str) -> str:
 
 def render_response(full: dict) -> tuple[str, list[dict]]:
     lang = full["lang"] if full["lang"] in ("ru", "ky") else "ru"
+    if full["mode"] == "rag":
+        return full["answer"], []
     if full["mode"] == "refuse" or full["faq_id"] is None:
         return REFUSE[lang], []
     if full["mode"] == "buttons":
@@ -38,6 +43,40 @@ def render_response(full: dict) -> tuple[str, list[dict]]:
         ]
         return BUTTONS[lang], buttons
     return phrase(full["faq_id"], lang, "answer"), []
+
+
+def resolve_knowledge(text: str, memory_key: str) -> dict:
+    """Выбирает конкурсный FAQ или полную базу, не меняя контракт answer()."""
+    classic = resolve(text, chat_id=memory_key)
+    if not get_setting_bool("rag_enabled"):
+        return classic
+
+    # Точное/сильное совпадение из конкурсной базы остаётся приоритетным.
+    # Это сохраняет ответы жюри и добавляет к ним, а не заменяет их RAG-базой.
+    classic_threshold = float(os.environ.get("FULL_MODE_FAQ_THRESHOLD", "0.78"))
+    if (
+        classic["mode"] == "direct"
+        and classic["faq_id"] is not None
+        and classic["confidence"] >= classic_threshold
+    ):
+        return classic
+
+    extended = resolve_rag(text)
+    if extended is not None:
+        return extended
+
+    if classic["mode"] in {"refuse", "buttons"}:
+        return classic
+
+    # В полном режиме не принимаем слабое прямое совпадение из маленького FAQ:
+    # иначе фраза вне тематики вроде вопроса о погоде может попасть в APN.
+    return {
+        "lang": classic["lang"],
+        "faq_id": None,
+        "confidence": classic["confidence"],
+        "candidates": [],
+        "mode": "refuse",
+    }
 
 
 def process_incoming(
@@ -65,9 +104,9 @@ def process_incoming(
     memory_key = f"{channel}:{external_id}"
     if chat.get("current_topic") is not None:
         set_topic(memory_key, int(chat["current_topic"]))
-    full = resolve(text, chat_id=memory_key)
+    full = resolve_knowledge(text, memory_key)
     message, buttons = render_response(full)
-    if transform is not None and full["mode"] == "direct" and full["faq_id"] is not None:
+    if transform is not None and full["mode"] in {"direct", "rag"}:
         message = transform(text, message, full["lang"])
 
     status = "needs_human" if full["mode"] == "refuse" else "open"
