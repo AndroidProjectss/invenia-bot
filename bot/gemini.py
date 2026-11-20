@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
@@ -62,10 +63,23 @@ def _text_from_payload(payload: dict) -> str:
     return "\n".join(chunks).strip()
 
 
-def _call(key: str, prompt: str) -> str:
+_MEDIA_LIMIT = 12 * 1024 * 1024
+_VOICE_PROMPT = (
+    "Расшифруй это голосовое дословно на языке оригинала, русском или кыргызском. "
+    "Верни только текст речи. Если неразборчиво, верни пустую строку."
+)
+_FILE_PROMPT = (
+    "Прочитай текст на изображении или в документе. "
+    "Если это вопрос абонента, верни только вопрос. "
+    "Если это скриншот ошибки, чек или договор, одной фразой напиши, о чём он. "
+    "Ничего не выдумывай. Если прочитать нельзя, верни пустую строку."
+)
+
+
+def _generate(key: str, parts: list[dict]) -> str:
     body = json.dumps(
         {
-            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "contents": [{"role": "user", "parts": parts}],
             "generationConfig": {"temperature": 0},
         }
     ).encode("utf-8")
@@ -74,9 +88,41 @@ def _call(key: str, prompt: str) -> str:
         data=body,
         headers={"Content-Type": "application/json", "x-goog-api-key": key},
     )
-    with urllib.request.urlopen(request, timeout=12) as response:
+    with urllib.request.urlopen(request, timeout=20) as response:
         payload = json.loads(response.read().decode("utf-8"))
     return _text_from_payload(payload)
+
+
+def _call(key: str, prompt: str) -> str:
+    return _generate(key, [{"text": prompt}])
+
+
+def read_media(data: bytes, mime: str, kind: str, transport=None) -> str:
+    """Голос, картинка или документ становятся текстом вопроса. Без ключа — пустая строка."""
+    if not data or len(data) > _MEDIA_LIMIT:
+        return ""
+    mime = (mime or "application/octet-stream").split(";", 1)[0].strip()
+    prompt = _VOICE_PROMPT if kind == "voice" else _FILE_PROMPT
+    load_dotenv()
+    if transport is None:
+        key = os.environ.get("GEMINI_API_KEY", "").strip()
+        if not key:
+            return ""
+
+        def transport(parts: list[dict]) -> str:
+            return _generate(key, parts)
+
+    parts = [
+        {"inline_data": {"mime_type": mime, "data": base64.b64encode(data).decode("ascii")}},
+        {"text": prompt},
+    ]
+    try:
+        text = transport(parts)
+    except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError, ValueError):
+        return ""
+    except Exception:
+        return ""
+    return (text or "").strip()
 
 
 def rephrase(question: str, official: str, lang: str, transport=None, note: str = "") -> str:

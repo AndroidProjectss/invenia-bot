@@ -21,6 +21,7 @@ from bot.dialog import (
 )
 from bot.envfile import load_dotenv
 from bot.gemini import rephrase as gemini_rephrase
+from bot.media import UNREADABLE, question_from_file, telegram_attachment
 from bot.service import process_incoming, select_faq
 from bot.stats import log_unanswered, summary
 from bot.storage import add_message, ensure_chat, update_chat
@@ -258,6 +259,38 @@ def _handle_callback(token: str, callback: dict) -> None:
     _send(token, chat_id, result["message"], [])
 
 
+def _download_telegram(token: str, file_id: str) -> bytes:
+    meta = _api(token, "getFile", {"file_id": file_id}, timeout=20)
+    path = (meta.get("result") or {}).get("file_path")
+    if not path:
+        raise RuntimeError("Telegram не отдал файл")
+    with urllib.request.urlopen(f"https://api.telegram.org/file/bot{token}/{path}", timeout=30) as response:
+        return response.read()
+
+
+def _handle_attachment(token: str, message: dict, chat_id: int, display_name: str, username: str) -> None:
+    caption = (message.get("caption") or "").strip()
+    message_id = f"telegram:{chat_id}:{message.get('message_id')}"
+    if caption:
+        _handle_text(token, chat_id, caption, display_name=display_name, username=username, message_id=message_id)
+        return
+    found = telegram_attachment(message)
+    if found is None:
+        return
+    file_id, mime, kind = found
+    try:
+        data = _download_telegram(token, file_id)
+        text = question_from_file(data, mime, kind)
+    except (urllib.error.URLError, RuntimeError, json.JSONDecodeError, TimeoutError, OSError):
+        text = ""
+    if not text:
+        _send(token, chat_id, UNREADABLE, [])
+        print(f"ответ: {UNREADABLE}", flush=True)
+        return
+    print(f"из вложения: {text}", flush=True)
+    _handle_text(token, chat_id, text, display_name=display_name, username=username, message_id=message_id)
+
+
 def bot_username(token: str) -> str:
     payload = _api(token, "getMe")
     if not payload.get("ok"):
@@ -296,21 +329,24 @@ def run_bot() -> None:
         for update in payload.get("result", []):
             offset = int(update["update_id"]) + 1
             try:
-                if "message" in update and update["message"].get("text"):
+                if "message" in update:
                     message = update["message"]
                     chat_id = message["chat"]["id"]
                     sender = message.get("from") or {}
                     name = " ".join(
                         part for part in (sender.get("first_name", ""), sender.get("last_name", "")) if part
                     )
-                    _handle_text(
-                        token,
-                        chat_id,
-                        message["text"],
-                        display_name=name,
-                        username=sender.get("username", ""),
-                        message_id=f"telegram:{chat_id}:{message.get('message_id')}",
-                    )
+                    if message.get("text"):
+                        _handle_text(
+                            token,
+                            chat_id,
+                            message["text"],
+                            display_name=name,
+                            username=sender.get("username", ""),
+                            message_id=f"telegram:{chat_id}:{message.get('message_id')}",
+                        )
+                    elif telegram_attachment(message):
+                        _handle_attachment(token, message, chat_id, name, sender.get("username", ""))
                 elif "callback_query" in update:
                     _handle_callback(token, update["callback_query"])
             except Exception:

@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import os
 import secrets
+import urllib.error
 from functools import wraps
 
 from flask import Flask, abort, flash, redirect, render_template, request, session, url_for
 
-from bot.channels import send_channel, send_whatsapp
+from bot.channels import download_whatsapp_media, send_channel, send_whatsapp
+from bot.media import UNREADABLE, question_from_file, whatsapp_attachment
 from bot.corpus import ROOT
 from bot.rag import summary as rag_summary
 from bot.service import process_incoming, select_faq
@@ -201,6 +204,24 @@ def create_app(test_config: dict | None = None) -> Flask:
                     _handle_whatsapp_faq(sender, names.get(sender, ""), message, button)
                     continue
                 text = (message.get("text") or {}).get("body", "").strip()
+                caption = (
+                    (message.get("image") or {}).get("caption")
+                    or (message.get("document") or {}).get("caption")
+                    or ""
+                ).strip()
+                attachment = whatsapp_attachment(message)
+                if not text and caption:
+                    text = caption
+                elif not text and attachment:
+                    media_id, mime, kind = attachment
+                    try:
+                        data, downloaded_mime = download_whatsapp_media(media_id)
+                        text = question_from_file(data, downloaded_mime or mime, kind)
+                    except (urllib.error.URLError, RuntimeError, json.JSONDecodeError, TimeoutError, OSError):
+                        text = ""
+                    if not text:
+                        send_whatsapp(sender, UNREADABLE)
+                        continue
                 if not text:
                     continue
                 result = process_incoming(
