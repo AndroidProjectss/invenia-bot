@@ -11,7 +11,8 @@ from bot.greetings import greeting
 from bot.understanding import understand
 from bot.dialog import get_topic
 from bot.rag import resolve as resolve_rag
-from bot.storage import add_message, ensure_chat, get_setting_bool, update_chat
+from bot.rag import price_answer
+from bot.storage import add_message, ensure_chat, get_setting_bool, update_chat, get_messages
 
 REFUSE = {
     "ru": "В учебной базе нет ответа на этот вопрос. Уточните вопрос по связи или напишите «оператор».",
@@ -56,6 +57,10 @@ def resolve_knowledge(text: str, memory_key: str) -> dict:
     classic = resolve(text, chat_id=memory_key)
     if not get_setting_bool("rag_enabled"):
         return classic
+
+    prices = price_answer(text)
+    if prices:
+        return prices
 
     # Точное/сильное совпадение из конкурсной базы остаётся приоритетным.
     # Это сохраняет ответы жюри и добавляет к ним, а не заменяет их RAG-базой.
@@ -110,8 +115,13 @@ def process_incoming(
     memory_key = f"{channel}:{external_id}"
     if chat.get("current_topic") is not None:
         set_topic(memory_key, int(chat["current_topic"]))
-    # Передаём только текущий вопрос и название предыдущей темы, без истории клиентов.
+    # Контекст только данного чата, ограниченный последними репликами.
     previous = faq_by_id().get(get_topic(memory_key), {}).get("question_ru", "")
+    recent = get_messages(chat["id"])[-7:-1]
+    if recent:
+        previous += "\n" + "\n".join(
+            f"{row['sender']}: {row['text'][:400]}" for row in recent
+        )
     interpreted = None if greeting(text) else understand(text, previous)
     query = interpreted["query"] if interpreted else text
     if interpreted and interpreted["kind"] == "outside":
@@ -120,13 +130,15 @@ def process_incoming(
     elif interpreted and interpreted["kind"] == "greeting":
         full = greeting("салам" if interpreted["lang"] == "ky" else "привет")
     else:
-        full = resolve_knowledge(query, memory_key)
+        # Сохраняем явно названное пользователем намерение даже при плохом пересказе ИИ.
+        prices = price_answer(text) if get_setting_bool("rag_enabled") else None
+        full = prices or resolve_knowledge(query, memory_key)
         if interpreted:
             full["lang"] = interpreted["lang"]
     if interpreted:
         full["normalized_query"] = query
     message, buttons = render_response(full)
-    if transform is not None and full["mode"] == "rag":
+    if transform is not None and full["mode"] == "rag" and full.get("rag_id") != "tariff-prices":
         message = transform(text, message, full["lang"])
 
     status = "needs_human" if full["mode"] == "refuse" else "open"

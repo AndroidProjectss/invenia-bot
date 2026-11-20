@@ -19,6 +19,31 @@ DEFAULT_PATH = DATA / "Beeline_KG_RAG_verified.jsonl"
 DEFAULT_THRESHOLD = 0.30
 
 
+def price_answer(text: str) -> dict | None:
+    """Запрос цены требует ценовой записи, а не описания бонуса."""
+    folded = text.lower()
+    folded = re.sub(r"(?:каком|какой|не нужен|не про).{0,18}бонус\w*", "", folded)
+    if not re.search(r"цен[аыуе]|стоимост|сколько.{0,12}стои|баа|канча.{0,12}тур", folded):
+        return None
+    if not re.search(r"цен[аыуе]|тариф|связь|подключ|баа", folded):
+        return None
+    # Конкретные услуги обрабатываются обычным поиском с фильтром цены.
+    if re.search(r"роуминг|сим|sim|номер|бонус|роутер|router|сеники|укмуш|безлимит|30\s*(?:gb|гб)|70\s*(?:gb|гб)", folded):
+        return None
+    rows = [row for row in load_knowledge()
+            if str(row["category"]).startswith("Тарифы:")
+            and re.search(r"сколько стоит", row["question"].lower())]
+    if not rows:
+        return None
+    answer = "Цены тарифов из загруженной базы:\n\n" + "\n\n".join(
+        f"{row['category'].removeprefix('Тарифы:').strip()}: {row['answer']}\n{row.get('source_url', '')}"
+        for row in rows
+    ) + "\n\nУсловия указаны на дату проверки базы. Перед подключением уточните актуальность цены по ссылке."
+    return {"lang": "ru", "faq_id": None, "confidence": 1.0, "candidates": [],
+            "mode": "rag", "rag_id": "tariff-prices", "question": "Цены тарифов для подключения",
+            "answer": answer, "sources": [row["id"] for row in rows]}
+
+
 def knowledge_path() -> Path:
     configured = os.environ.get("RAG_KNOWLEDGE_PATH", "").strip()
     return Path(configured).expanduser() if configured else DEFAULT_PATH
@@ -119,6 +144,9 @@ def search(text: str, limit: int = 3) -> list[dict]:
 
 
 def resolve(text: str, threshold: float | None = None) -> dict | None:
+    prices = price_answer(text)
+    if prices:
+        return prices
     # Общий запрос об офисах ведёт на полную карту, а не в случайный офис.
     folded = text.lower()
     if re.search(r"офис|кеңсе|кенсе", folded) and not re.search(r"цум|вефа|vefa|парк|чуй|киев|горьк", folded):
@@ -136,6 +164,12 @@ def resolve(text: str, threshold: float | None = None) -> dict | None:
     if not matches or matches[0]["confidence"] < minimum:
         return None
     best = matches[0]
+    if re.search(r"цен[аыуе]|стоимост|сколько.{0,12}стои|баа|канча.{0,12}тур", folded):
+        # Не позволяем совпадению по слову «связь» ответить бонусом на вопрос о цене.
+        if not re.search(r"сколько стоит|стоимость|цен[аыуе]", best["question"].lower()):
+            return None
+    if len(matches) > 1 and best["confidence"] < 0.65 and best["confidence"] - matches[1]["confidence"] < 0.05:
+        return None
     return {
         "lang": best.get("language") or "ru",
         "faq_id": None,
