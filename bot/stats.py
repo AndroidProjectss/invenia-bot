@@ -45,15 +45,5 @@ def summary(path: Path | None = None) -> str:
         f"Не закрыто ботом: {len(rows)}",
         f"Отказ, темы в базе нет: {refused}",
         f"Показаны три похожих вопроса: {uncertain}",
-        "Последние формулировки:",
     ]
-    seen: set[str] = set()
-    for row in reversed(rows):
-        text = row.get("text") or "(пустой вопрос)"
-        if text in seen:
-            continue
-        seen.add(text)
-        lines.append(f"- {text}")
-        if len(seen) >= 15:
-            break
     return "\n".join(lines)

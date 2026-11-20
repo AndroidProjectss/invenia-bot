@@ -7,13 +7,15 @@ import os
 from bot.answer import resolve
 from bot.corpus import faq_by_id
 from bot.dialog import set_topic
-from bot.textutil import basic_normalize
+from bot.greetings import greeting
+from bot.understanding import understand
+from bot.dialog import get_topic
 from bot.rag import resolve as resolve_rag
 from bot.storage import add_message, ensure_chat, get_setting_bool, update_chat
 
 REFUSE = {
-    "ru": "В базе Invenia пока нет ответа на этот вопрос. Я передал диалог оператору.",
-    "ky": "Invenia базасында бул суроого азырынча жооп жок. Диалог операторго өткөрүлдү.",
+    "ru": "В учебной базе нет ответа на этот вопрос. Уточните вопрос по связи или напишите «оператор».",
+    "ky": "Окуу базасында бул суроого жооп жок. Байланыш боюнча сурооңузду тактаңыз же «оператор» деп жазыңыз.",
 }
 BUTTONS = {
     "ru": "Уточните, какой вопрос вы имели в виду:",
@@ -48,15 +50,11 @@ def render_response(full: dict) -> tuple[str, list[dict]]:
 
 def resolve_knowledge(text: str, memory_key: str) -> dict:
     """Выбирает конкурсный FAQ или полную базу, не меняя контракт answer()."""
-    normalized = basic_normalize(text)
-    if normalized in {"привет", "здравствуйте", "добрый день", "салам", "саламатсызбы", "hello", "hi"}:
-        lang = "ky" if normalized in {"салам", "саламатсызбы"} else "ru"
-        return {"lang": lang, "faq_id": None, "confidence": 1.0, "candidates": [],
-                "mode": "greeting", "answer": "Саламатсызбы! Кандай жардам керек?" if lang == "ky" else "Здравствуйте! Чем могу помочь по услугам связи?"}
+    hello = greeting(text)
+    if hello:
+        return hello
     classic = resolve(text, chat_id=memory_key)
     if not get_setting_bool("rag_enabled"):
-        if classic["mode"] == "buttons":
-            return {**classic, "mode": "refuse", "faq_id": None, "candidates": []}
         return classic
 
     # Точное/сильное совпадение из конкурсной базы остаётся приоритетным.
@@ -112,9 +110,23 @@ def process_incoming(
     memory_key = f"{channel}:{external_id}"
     if chat.get("current_topic") is not None:
         set_topic(memory_key, int(chat["current_topic"]))
-    full = resolve_knowledge(text, memory_key)
+    # Передаём только текущий вопрос и название предыдущей темы, без истории клиентов.
+    previous = faq_by_id().get(get_topic(memory_key), {}).get("question_ru", "")
+    interpreted = None if greeting(text) else understand(text, previous)
+    query = interpreted["query"] if interpreted else text
+    if interpreted and interpreted["kind"] == "outside":
+        full = {"lang": interpreted["lang"], "faq_id": None, "confidence": 0.0,
+                "candidates": [], "mode": "refuse"}
+    elif interpreted and interpreted["kind"] == "greeting":
+        full = greeting("салам" if interpreted["lang"] == "ky" else "привет")
+    else:
+        full = resolve_knowledge(query, memory_key)
+        if interpreted:
+            full["lang"] = interpreted["lang"]
+    if interpreted:
+        full["normalized_query"] = query
     message, buttons = render_response(full)
-    if transform is not None and full["mode"] in {"direct", "rag"}:
+    if transform is not None and full["mode"] == "rag":
         message = transform(text, message, full["lang"])
 
     status = "needs_human" if full["mode"] == "refuse" else "open"
@@ -152,7 +164,7 @@ def select_faq(
     set_topic(memory_key, faq_id)
     update_chat(chat["id"], current_topic=faq_id, language=lang, status="open")
     message = phrase(faq_id, lang, "answer")
-    if transform is not None:
+    if transform is not None and get_setting_bool("rag_enabled"):
         message = transform("", message, lang)
     add_message(chat["id"], "outbound", "bot", message, mode="selected")
     return {"chat": chat, "message": message}

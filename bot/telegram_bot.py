@@ -21,6 +21,7 @@ from bot.dialog import (
 )
 from bot.envfile import load_dotenv
 from bot.gemini import rephrase as gemini_rephrase
+from bot.greetings import greeting
 from bot.media import UNREADABLE, question_from_file, telegram_attachment
 from bot.service import process_incoming, select_faq
 from bot.stats import log_unanswered, summary
@@ -107,6 +108,9 @@ def compose(chat_id: str, text: str, *, rephrase=None, log=None) -> list[tuple[s
     if is_handed_off(chat_id):
         keep_for_operator(chat_id, text)
         return []
+    hello = greeting(text)
+    if hello:
+        return [(hello["answer"], [])]
     if operator_requested(text) and not any(word in basic_normalize(text) for word in ("другого", "другой", "башка")):
         full = resolve(text, chat_id=chat_id)
         lang = full["lang"] if full["lang"] in ("ru", "ky") else "ru"
@@ -216,7 +220,7 @@ def _handle_text(
     )
     if result.get("duplicate") or not result.get("send"):
         return
-    if result["full"]["mode"] == "refuse":
+    if result["full"]["mode"] in {"refuse", "buttons"}:
         log_unanswered(text, result["full"]["lang"], result["full"]["mode"])
     rows = [
         [{"text": item["text"], "callback_data": f"{item['id']}:{item['lang']}"}]

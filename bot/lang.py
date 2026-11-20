@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-from bot.textutil import basic_normalize
+from bot.textutil import basic_normalize, transliterate
 
 # Слова, которые не голосуют: бренд, термин или общее слово обоих языков.
 NEUTRAL = {
@@ -268,10 +268,10 @@ def detect_lang(text: str) -> str:
     lat_tokens = re.findall(r"[a-z]+", raw)
     ky_score = 0
     ru_score = 0
-    for token in cyr_tokens:
+    for token in [*cyr_tokens, *(transliterate(token) for token in lat_tokens)]:
         if token in NEUTRAL:
             continue
-        if token in KY_WORDS or _suffix_kyrgyz(token):
+        if token in KY_WORDS or token in {"картам", "жоголуп", "кетти", "акча", "которуу", "салам", "турат"} or _suffix_kyrgyz(token):
             ky_score += 1
         elif token in RU_WORDS:
             ru_score += 1

@@ -15,7 +15,7 @@ class StatsAndButtonsTest(unittest.TestCase):
             log_unanswered("а может тариф", "ru", "buttons", path)
             text = summary(path)
             self.assertIn("Не закрыто ботом: 2", text)
-            self.assertIn("Прогноз погоды", text)
+            self.assertNotIn("Прогноз погоды", text)
             self.assertNotIn("chat", text.lower())
             raw = path.read_text(encoding="utf-8")
             self.assertNotIn("chat_id", raw)

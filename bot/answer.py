@@ -7,7 +7,7 @@ from bot.dialog import get_topic, set_topic
 from bot.lang import detect_lang
 from bot.search_fuzz import rank as rank_fuzz
 from bot.search_tfidf import rank as rank_tfidf
-from bot.textutil import basic_normalize
+from bot.textutil import basic_normalize, tokenize
 
 _FILLERS = {"а", "и", "ну", "же", "это", "то", "мне", "пожалуйста"}
 # Слова продолжения без новой темы: «а сколько стоит?» после роуминга.
@@ -43,7 +43,7 @@ def rank_for(method: str, text: str) -> list[tuple[int, float]]:
 
 def is_elliptical(text: str) -> bool:
     """Короткая реплика без своей темы. Её смысл берётся из прошлого вопроса чата."""
-    tokens = [token for token in basic_normalize(text).split() if token not in _FILLERS]
+    tokens = [token for token in tokenize(text) if token not in _FILLERS]
     if not tokens or len(tokens) > 4:
         return False
     return all(token in _FOLLOW for token in tokens)
