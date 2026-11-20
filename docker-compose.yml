@@ -12,3 +12,11 @@ services:
       - "${ADMIN_PORT:-8080}:${ADMIN_PORT:-8080}"
     volumes:
       - ./data:/app/data
+    networks:
+      - default
+      - talent
+
+networks:
+  talent:
+    external: true
+    name: deploy_default
