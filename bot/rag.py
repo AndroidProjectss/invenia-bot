@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from datetime import date
 from functools import lru_cache
 from pathlib import Path
@@ -118,6 +119,16 @@ def search(text: str, limit: int = 3) -> list[dict]:
 
 
 def resolve(text: str, threshold: float | None = None) -> dict | None:
+    # Общий запрос об офисах ведёт на полную карту, а не в случайный офис.
+    folded = text.lower()
+    if re.search(r"офис|кеңсе|кенсе", folded) and not re.search(r"цум|вефа|vefa|парк|чуй|киев|горьк", folded):
+        row = next((item for item in load_knowledge() if item["id"] == "BKG-0167"), None)
+        if row:
+            kyrgyz = bool(re.search(r"кай|жак|дарек|адреси|офиси", folded))
+            return {"lang": "ky" if kyrgyz else "ru", "faq_id": None, "confidence": 1.0,
+                    "candidates": [], "mode": "rag", "rag_id": row["id"],
+                    "answer": "Beeline кеңселеринин даректери жана карта: https://www.beeline.kg/ru/map. Кайсы шаардан кеңсе издеп жатасыз?" if kyrgyz else "Адреса всех офисов Beeline и карта: https://www.beeline.kg/ru/map. В каком городе вам нужен офис?",
+                    "source_url": row.get("source_url", "")}
     matches = search(text, limit=3)
     minimum = threshold
     if minimum is None:

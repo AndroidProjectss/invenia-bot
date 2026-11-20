@@ -107,7 +107,7 @@ def compose(chat_id: str, text: str, *, rephrase=None, log=None) -> list[tuple[s
     if is_handed_off(chat_id):
         keep_for_operator(chat_id, text)
         return []
-    if operator_requested(text):
+    if operator_requested(text) and not any(word in basic_normalize(text) for word in ("другого", "другой", "башка")):
         full = resolve(text, chat_id=chat_id)
         lang = full["lang"] if full["lang"] in ("ru", "ky") else "ru"
         official = phrase(14, lang, "answer")
@@ -190,7 +190,7 @@ def _handle_text(
         print("бот молчит: диалог у оператора", flush=True)
         return
 
-    if operator_requested(text):
+    if operator_requested(text) and not any(word in basic_normalize(text) for word in ("другого", "другой", "башка")):
         saved = add_message(
             chat["id"], "inbound", "customer", text,
             external_message_id=message_id,
@@ -216,7 +216,7 @@ def _handle_text(
     )
     if result.get("duplicate") or not result.get("send"):
         return
-    if result["full"]["mode"] != "direct":
+    if result["full"]["mode"] == "refuse":
         log_unanswered(text, result["full"]["lang"], result["full"]["mode"])
     rows = [
         [{"text": item["text"], "callback_data": f"{item['id']}:{item['lang']}"}]

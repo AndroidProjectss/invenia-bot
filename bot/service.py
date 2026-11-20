@@ -7,6 +7,7 @@ import os
 from bot.answer import resolve
 from bot.corpus import faq_by_id
 from bot.dialog import set_topic
+from bot.textutil import basic_normalize
 from bot.rag import resolve as resolve_rag
 from bot.storage import add_message, ensure_chat, get_setting_bool, update_chat
 
@@ -28,7 +29,7 @@ def phrase(faq_id: int, lang: str, field: str) -> str:
 
 def render_response(full: dict) -> tuple[str, list[dict]]:
     lang = full["lang"] if full["lang"] in ("ru", "ky") else "ru"
-    if full["mode"] == "rag":
+    if full["mode"] in {"rag", "greeting"}:
         return full["answer"], []
     if full["mode"] == "refuse" or full["faq_id"] is None:
         return REFUSE[lang], []
@@ -47,8 +48,15 @@ def render_response(full: dict) -> tuple[str, list[dict]]:
 
 def resolve_knowledge(text: str, memory_key: str) -> dict:
     """Выбирает конкурсный FAQ или полную базу, не меняя контракт answer()."""
+    normalized = basic_normalize(text)
+    if normalized in {"привет", "здравствуйте", "добрый день", "салам", "саламатсызбы", "hello", "hi"}:
+        lang = "ky" if normalized in {"салам", "саламатсызбы"} else "ru"
+        return {"lang": lang, "faq_id": None, "confidence": 1.0, "candidates": [],
+                "mode": "greeting", "answer": "Саламатсызбы! Кандай жардам керек?" if lang == "ky" else "Здравствуйте! Чем могу помочь по услугам связи?"}
     classic = resolve(text, chat_id=memory_key)
     if not get_setting_bool("rag_enabled"):
+        if classic["mode"] == "buttons":
+            return {**classic, "mode": "refuse", "faq_id": None, "candidates": []}
         return classic
 
     # Точное/сильное совпадение из конкурсной базы остаётся приоритетным.
@@ -65,7 +73,7 @@ def resolve_knowledge(text: str, memory_key: str) -> dict:
     if extended is not None:
         return extended
 
-    if classic["mode"] in {"refuse", "buttons"}:
+    if classic["mode"] == "refuse":
         return classic
 
     # В полном режиме не принимаем слабое прямое совпадение из маленького FAQ:

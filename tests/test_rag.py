@@ -42,6 +42,24 @@ class FullKnowledgeBaseTest(unittest.TestCase):
         self.assertEqual(result["mode"], "direct")
         self.assertEqual(result["faq_id"], 1)
 
+    def test_live_messages_do_not_offer_unrelated_buttons(self):
+        for enabled in (False, True):
+            set_setting("rag_enabled", enabled)
+            result = process_incoming("telegram", "uncertain", "а может тариф")
+            self.assertEqual(result["buttons"], [])
+
+    def test_greeting_is_answered_without_handoff(self):
+        result = process_incoming("telegram", "hello", "Привет")
+        self.assertEqual(result["full"]["mode"], "greeting")
+        self.assertIn("Здравствуйте", result["message"])
+
+    def test_generic_office_questions_use_map_in_both_languages(self):
+        set_setting("rag_enabled", True)
+        for question in ("Где находится офис Билайна", "Билайн офиси адрес кайсыл жакта"):
+            result = process_incoming("telegram", question, question)
+            self.assertEqual(result["buttons"], [])
+            self.assertIn("beeline.kg/ru/map", result["message"])
+
     def test_full_mode_uses_extended_base(self):
         set_setting("rag_enabled", True)
         result = process_incoming(
