@@ -1,0 +1,27 @@
+name: deploy
+
+on:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: deploy-main
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Update the bot on the server
+        uses: appleboy/ssh-action@v1.2.2
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          command_timeout: 20m
+          script: |
+            cd /home/deploy/app/invenia-bot
+            git pull --ff-only
+            docker compose up -d --build
+            docker compose ps
