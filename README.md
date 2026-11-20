@@ -139,5 +139,5 @@ python -m unittest discover -s tests -v
 
 ## Деплой
 
-Пуш в `main` запускает GitHub Actions. Раннер заходит на сервер по SSH и выполняет `git pull` и `docker compose up -d --build`. Секреты репозитория: `SSH_HOST`, `SSH_USER`, `SSH_KEY`. Файл `.env` на сервере Actions не трогает.
+Пуш в `main` запускает GitHub Actions. Раннер заходит на сервер по SSH, порт 43816, и выполняет `git pull` и `docker compose up -d --build`. Секреты репозитория: `SSH_HOST`, `SSH_USER`, `SSH_KEY`. Файл `.env` на сервере Actions не трогает.
 По умолчанию база создаётся в `data/invenia.sqlite3`. Другой путь можно задать через `BOT_DB_PATH`. База и локальные журналы не коммитятся в Git, но содержат переписку клиентов и должны быть защищены резервным копированием и политикой доступа.
