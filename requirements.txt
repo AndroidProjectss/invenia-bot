@@ -1,0 +1,2 @@
+rapidfuzz==3.14.6
+scikit-learn==1.9.1
