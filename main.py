@@ -4,6 +4,8 @@ python main.py check
 python main.py ask "текст вопроса"
 python main.py ask --chat demo "А сколько стоит?"
 python main.py bot
+python main.py admin
+python main.py start
 """
 
 from __future__ import annotations
@@ -18,6 +20,8 @@ invenia-bot — поддержка RU/KY по базе FAQ.
   python main.py ask "текст"           напечатать JSON для жюри
   python main.py ask --chat ИМЯ "текст" тот же чат помнит прошлую тему
   python main.py bot                   запустить Telegram
+  python main.py admin                 запустить админку и WhatsApp webhook
+  python main.py start                 запустить всё одной командой
 
 Функция для автопроверки, из корня репозитория:
 
@@ -57,6 +61,16 @@ def main(argv: list[str] | None = None) -> int:
         from bot.telegram_bot import run_bot
 
         run_bot()
+        return 0
+    if command == "admin":
+        from bot.admin_app import run_admin
+
+        run_admin()
+        return 0
+    if command == "start":
+        from bot.runner import run_all
+
+        run_all()
         return 0
     print(f"Неизвестная команда: {command}\n")
     print(HELP)

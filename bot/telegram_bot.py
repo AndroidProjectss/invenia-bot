@@ -8,10 +8,12 @@ import time
 import urllib.error
 import urllib.request
 
-from bot.answer import resolve
+from bot.channels import send_telegram
 from bot.corpus import ROOT, faq_by_id
-from bot.dialog import reset, set_topic
+from bot.dialog import reset
+from bot.service import process_incoming, select_faq
 from bot.stats import log_unanswered, summary
+from bot.storage import add_message, ensure_chat
 
 _REFUSE = {
     "ru": "В базе FAQ нет ответа на этот вопрос. Я не буду его выдумывать.",
@@ -22,9 +24,9 @@ _BUTTONS = {
     "ky": "Ишенбей жатам. Жакын суроону тандаңыз:",
 }
 _HELLO = (
-    "Напишите вопрос о связи на русском или кыргызском.\n"
-    "Байланыш боюнча суроону орусча же кыргызча жазыңыз.\n"
-    "/stats — неотвеченные вопросы, /reset — забыть тему этого чата."
+    "Здравствуйте! Это поддержка Invenia. Напишите вопрос на русском или кыргызском.\n"
+    "Саламатсызбы! Бул Invenia колдоо кызматы. Суроону орусча же кыргызча жазыңыз.\n"
+    "/reset — забыть тему текущего диалога."
 )
 
 
@@ -75,13 +77,24 @@ def _api(token: str, method: str, payload: dict | None = None) -> dict:
 
 
 def _send(token: str, chat_id: int | str, text: str, buttons: list[dict]) -> None:
-    payload: dict = {"chat_id": chat_id, "text": text}
-    if buttons:
-        payload["reply_markup"] = {"inline_keyboard": buttons}
-    _api(token, "sendMessage", payload)
+    normalized = []
+    for row in buttons:
+        button = row[0]
+        raw = button.get("callback_data", "")
+        raw_id, lang = raw.split(":", 1) if ":" in raw else ("", "ru")
+        if raw_id.isdigit():
+            normalized.append({"id": int(raw_id), "lang": lang, "text": button["text"]})
+    send_telegram(str(chat_id), text, normalized)
 
 
-def _handle_text(token: str, chat_id: int, text: str) -> None:
+def _handle_text(
+    token: str,
+    chat_id: int,
+    text: str,
+    display_name: str = "",
+    username: str = "",
+    message_id: str | None = None,
+) -> None:
     if text.startswith("/start"):
         _send(token, chat_id, _HELLO, [])
         return
@@ -90,13 +103,29 @@ def _handle_text(token: str, chat_id: int, text: str) -> None:
         _send(token, chat_id, "Тема этого чата забыта. Задайте вопрос заново.", [])
         return
     if text.startswith("/stats"):
+        admins = {item.strip() for item in os.environ.get("TELEGRAM_ADMIN_IDS", "").split(",") if item.strip()}
+        if str(chat_id) not in admins:
+            _send(token, chat_id, "Команда доступна только оператору.", [])
+            return
         _send(token, chat_id, summary(), [])
         return
-    full = resolve(text, chat_id=str(chat_id))
-    if full["mode"] != "direct":
-        log_unanswered(text, full["lang"], full["mode"])
-    message, buttons = render(full)
-    _send(token, chat_id, message, buttons)
+    result = process_incoming(
+        "telegram",
+        str(chat_id),
+        text,
+        display_name=display_name,
+        username=username,
+        external_message_id=message_id,
+    )
+    if result.get("duplicate") or not result.get("send"):
+        return
+    if result["full"]["mode"] != "direct":
+        log_unanswered(text, result["full"]["lang"], result["full"]["mode"])
+    rows = [
+        [{"text": item["text"], "callback_data": f"{item['id']}:{item['lang']}"}]
+        for item in result["buttons"]
+    ]
+    _send(token, chat_id, result["message"], rows)
 
 
 def _handle_callback(token: str, callback: dict) -> None:
@@ -108,7 +137,13 @@ def _handle_callback(token: str, callback: dict) -> None:
     _api(token, "answerCallbackQuery", {"callback_query_id": callback_id})
     if chat_id is None or ":" not in data:
         return
-    raw_id, lang = data.split(":", 1)
+    parts = data.split(":")
+    if parts[0] == "faq" and len(parts) == 3:
+        raw_id, lang = parts[1], parts[2]
+    elif len(parts) == 2:
+        raw_id, lang = parts
+    else:
+        return
     try:
         faq_id = int(raw_id)
     except ValueError:
@@ -117,8 +152,10 @@ def _handle_callback(token: str, callback: dict) -> None:
         lang = "ru"
     if faq_id not in faq_by_id():
         return
-    set_topic(str(chat_id), faq_id)
-    _send(token, chat_id, phrase(faq_id, lang, "answer"), [])
+    chat_row = ensure_chat("telegram", str(chat_id), language=lang)
+    add_message(chat_row["id"], "inbound", "customer", phrase(faq_id, lang, "question"), mode="selection")
+    result = select_faq("telegram", str(chat_id), faq_id, lang)
+    _send(token, chat_id, result["message"], [])
 
 
 def run_bot() -> None:
@@ -147,7 +184,19 @@ def run_bot() -> None:
         for update in payload.get("result", []):
             offset = int(update["update_id"]) + 1
             if "message" in update and update["message"].get("text"):
-                chat_id = update["message"]["chat"]["id"]
-                _handle_text(token, chat_id, update["message"]["text"])
+                message = update["message"]
+                chat_id = message["chat"]["id"]
+                sender = message.get("from") or {}
+                name = " ".join(
+                    part for part in (sender.get("first_name", ""), sender.get("last_name", "")) if part
+                )
+                _handle_text(
+                    token,
+                    chat_id,
+                    message["text"],
+                    display_name=name,
+                    username=sender.get("username", ""),
+                    message_id=f"telegram:{chat_id}:{message.get('message_id')}",
+                )
             elif "callback_query" in update:
                 _handle_callback(token, update["callback_query"])
