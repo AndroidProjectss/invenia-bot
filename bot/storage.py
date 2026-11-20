@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import json
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -79,6 +80,10 @@ def init_db() -> None:
                 provider_id TEXT UNIQUE,
                 status TEXT NOT NULL,
                 error TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE IF NOT EXISTS answer_details (
+                message_id INTEGER PRIMARY KEY REFERENCES messages(id),
+                payload TEXT NOT NULL
             );
             """
         )
@@ -204,11 +209,21 @@ def get_messages(chat_id: int) -> list[dict]:
     with _connect() as db:
         rows = db.execute(
             "SELECT m.*, d.status AS delivery_status, d.error AS delivery_error "
-            "FROM messages m LEFT JOIN deliveries d ON d.message_id = m.id "
+            ", a.payload AS answer_details FROM messages m LEFT JOIN deliveries d ON d.message_id = m.id "
+            "LEFT JOIN answer_details a ON a.message_id = m.id "
             "WHERE m.chat_id = ? ORDER BY m.id",
             (chat_id,),
         ).fetchall()
-    return [dict(row) for row in rows]
+    result = [dict(row) for row in rows]
+    for item in result:
+        item["answer_details"] = json.loads(item["answer_details"]) if item["answer_details"] else None
+    return result
+
+
+def save_answer_details(message_id: int, details: dict) -> None:
+    with _connect() as db:
+        db.execute("INSERT OR REPLACE INTO answer_details(message_id, payload) VALUES (?, ?)",
+                   (message_id, json.dumps(details, ensure_ascii=False)))
 
 
 def record_delivery(message_id: int, status: str, provider_id: str | None = None, error: str = "") -> None:

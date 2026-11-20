@@ -6,6 +6,7 @@ import json
 import os
 import urllib.request
 import urllib.error
+from bot.media import bounded_read
 
 
 class ChannelError(RuntimeError):
@@ -108,7 +109,7 @@ def download_whatsapp_media(media_id: str) -> tuple[bytes, str]:
         meta = json.loads(response.read().decode("utf-8"))
     file_request = urllib.request.Request(meta["url"], headers={"Authorization": f"Bearer {token}"})
     with urllib.request.urlopen(file_request, timeout=40) as response:
-        return response.read(), meta.get("mime_type") or "application/octet-stream"
+        return bounded_read(response), meta.get("mime_type") or "application/octet-stream"
 
 
 def send_channel(channel: str, recipient: str, text: str, buttons: list[dict] | None = None) -> dict:

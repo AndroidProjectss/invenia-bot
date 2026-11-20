@@ -20,15 +20,19 @@
       for (const selector of ['.stats', '.chat-list', '.conversation-head', '.messages']) {
         const current = document.querySelector(selector);
         const incoming = next.querySelector(selector);
-        if (!current || !incoming || current.innerHTML === incoming.innerHTML) continue;
+        if (!current || !incoming || (current.dataset.serverHtml || current.innerHTML) === incoming.innerHTML) continue;
         const top = current.scrollTop;
         const atBottom = current.scrollHeight - current.clientHeight - top < 80;
+        const openDetails = [...current.querySelectorAll('details')].map((detail,index)=>detail.open?index:-1);
         current.innerHTML = incoming.innerHTML;
+        current.dataset.serverHtml = incoming.innerHTML;
+        current.querySelectorAll('details').forEach((detail,index)=>{detail.open=openDetails.includes(index);});
         current.scrollTop = selector === '.messages' && atBottom ? current.scrollHeight : top;
       }
       // Первый чат появился после открытия пустой панели.
       if (!document.querySelector('.reply') && next.querySelector('.reply')) location.reload();
       status.textContent = '● На связи';
+      document.dispatchEvent(new Event('invenia:updated'));
     } catch (_) {
       status.textContent = '● Нет обновлений — повторяем';
     } finally {

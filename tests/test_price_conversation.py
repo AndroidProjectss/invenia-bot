@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from bot.service import process_incoming
-from bot.storage import set_setting
+from bot.storage import set_setting, get_messages, update_chat, add_message
 from bot.rag import load_knowledge
 
 
@@ -47,3 +47,23 @@ class PriceConversationTest(unittest.TestCase):
         context = understand.call_args.args[1]
         self.assertIn("Мне цены тарифов", context)
         self.assertNotIn("Привет", context)
+
+    def test_paused_bot_does_not_call_ai(self):
+        first = process_incoming("telegram", "operator-chat", "Привет")
+        update_chat(first["chat"]["id"], bot_enabled=0)
+        with patch("bot.service.understand", side_effect=AssertionError("ИИ не нужен")):
+            result = process_incoming("telegram", "operator-chat", "Подскажите цены")
+        self.assertFalse(result["send"])
+
+    def test_answer_diagnostics_are_saved(self):
+        result = process_incoming("telegram", "diagnostics", "Мне цены тарифов")
+        message = get_messages(result["chat"]["id"])[-1]
+        self.assertEqual(message["answer_details"]["rag_id"], "tariff-prices")
+        self.assertEqual(message["answer_details"]["understanding"], "local")
+
+    def test_reset_excludes_earlier_context(self):
+        first = process_incoming("telegram", "reset-chat", "Мне цены тарифов")
+        add_message(first["chat"]["id"], "inbound", "customer", "/reset")
+        with patch("bot.service.understand", return_value=None) as understand:
+            process_incoming("telegram", "reset-chat", "Как подключиться?")
+        self.assertNotIn("Мне цены тарифов", understand.call_args.args[1])

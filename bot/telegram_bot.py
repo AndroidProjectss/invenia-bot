@@ -22,7 +22,7 @@ from bot.dialog import (
 from bot.envfile import load_dotenv
 from bot.gemini import rephrase as gemini_rephrase
 from bot.greetings import greeting
-from bot.media import UNREADABLE, question_from_file, telegram_attachment
+from bot.media import UNREADABLE, question_from_file, telegram_attachment, bounded_read, MediaError
 from bot.service import process_incoming, select_faq
 from bot.stats import log_unanswered, summary
 from bot.storage import add_message, ensure_chat, update_chat
@@ -269,22 +269,22 @@ def _download_telegram(token: str, file_id: str) -> bytes:
     if not path:
         raise RuntimeError("Telegram не отдал файл")
     with urllib.request.urlopen(f"https://api.telegram.org/file/bot{token}/{path}", timeout=30) as response:
-        return response.read()
+        return bounded_read(response)
 
 
 def _handle_attachment(token: str, message: dict, chat_id: int, display_name: str, username: str) -> None:
     caption = (message.get("caption") or "").strip()
     message_id = f"telegram:{chat_id}:{message.get('message_id')}"
-    if caption:
-        _handle_text(token, chat_id, caption, display_name=display_name, username=username, message_id=message_id)
-        return
     found = telegram_attachment(message)
     if found is None:
         return
     file_id, mime, kind = found
     try:
         data = _download_telegram(token, file_id)
-        text = question_from_file(data, mime, kind)
+        text = question_from_file(data, mime, kind, caption=caption)
+    except MediaError as error:
+        _send(token, chat_id, str(error), [])
+        return
     except (urllib.error.URLError, RuntimeError, json.JSONDecodeError, TimeoutError, OSError):
         text = ""
     if not text:

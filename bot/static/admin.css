@@ -1,4 +1,22 @@
 /* Ограничиваем высоту всех контейнеров: прокрутка принадлежит двум панелям. */
+.thread-tools{flex-shrink:0;display:flex;align-items:center;gap:12px;padding:10px 20px;border-bottom:1px solid #e6eaf1;background:white}
+.thread-tools input{max-width:320px;min-width:0;flex:1;border:1px solid #e0e6ef;background:#f8fafc;border-radius:9px;padding:9px 12px;font:inherit}
+.thread-tools span{font-size:12px;color:#748094}.thread-tools button{margin-left:auto;white-space:nowrap}
+.answer-details{margin-top:10px;border-top:1px solid #d9e2f1;padding-top:8px;font-size:11px;color:#64748b;white-space:normal}
+.answer-details summary{cursor:pointer;font-weight:600;user-select:none}.answer-details div{margin-top:5px;overflow-wrap:anywhere}
+.message a{color:#245bd6;text-decoration:underline;text-underline-offset:3px}
+.message[hidden]{display:none}
+.composer-hint{font-size:10px;color:#748094;position:absolute;bottom:4px;left:20px}
+.reply{position:relative;padding-bottom:23px!important}
+.topbar{box-shadow:0 1px 8px #1e293b04}
+.brand{background:linear-gradient(140deg,#487cff,#2152d6);box-shadow:0 4px 12px #2563eb25}
+.stat b{letter-spacing:-1px;font-variant-numeric:tabular-nums}
+.stat{position:relative;overflow:hidden}.stat:before{content:'';position:absolute;left:0;top:20px;bottom:20px;width:3px;background:#d6e4ff;border-radius:4px}
+.stat:nth-child(2):before{background:#f5bc66}.stat:nth-child(3):before{background:#7bd4a0}
+.conversation-head h2{letter-spacing:-.4px}.chat-item{transition:background .15s}
+.chat-list:empty:after{content:'Диалогов пока нет';display:block;padding:28px;color:#748094}
+.message-text{white-space:pre-wrap}.filters input::placeholder{color:#94a3b8}
+@media(max-width:760px){.thread-tools{padding:8px;gap:6px}.thread-tools span{display:none}.thread-tools button{padding:8px;font-size:11px}.thread-tools input{width:100px}.live-status{display:none}}
 .live-status{font-size:11px;color:#15803d;white-space:nowrap}.delivery.failed{color:#b91c1c;font-weight:600}.delivery.delivered,.delivery.read{color:#15803d}
 html,body{height:100%;overflow:hidden}
 body{height:100vh;height:100dvh;display:flex;flex-direction:column}
