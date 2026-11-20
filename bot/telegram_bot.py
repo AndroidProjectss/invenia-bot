@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 import traceback
 import urllib.error
 import urllib.request
 
 from bot.answer import resolve
-from bot.lang import detect_lang
 from bot.corpus import faq_by_id
 from bot.dialog import (
     is_handed_off,
@@ -33,9 +33,14 @@ _BUTTONS = {
     "ky": "Сурооңузду тактап коюңузчу:",
 }
 _HANDOFF = {
-    "ru": "Сейчас подключу оператора. Напишите /reset, если хотите снова говорить со мной.",
-    "ky": "Азыр операторду кошом. Кайра мен менен сүйлөшкүңүз келсе, /reset деп жазыңыз.",
+    "ru": "Сейчас подключу оператора. Если хотите снова писать мне, отправьте /reset.",
+    "ky": "Азыр операторду кошом. Кайра мага жазгыңыз келсе, /reset деп жазыңыз.",
 }
+_OPERATOR_NOTE = (
+    "Человек уже просит живого оператора. Скажи, что соединяешь его с оператором. "
+    "Часы работы возьми из официального текста. Не проси написать слово «оператор». "
+    "В конце коротко скажи, что команда /reset возвращает к этому боту."
+)
 _HELLO = (
     "Здравствуйте. Напишите вопрос по связи на русском или кыргызском.\n"
     "Саламатсызбы. Байланыш боюнча суроону орусча же кыргызча жазыңыз."
@@ -47,6 +52,20 @@ def phrase(faq_id: int, lang: str, field: str) -> str:
     item = faq_by_id()[faq_id]
     suffix = "ky" if lang == "ky" else "ru"
     return item[f"{field}_{suffix}"]
+
+
+def _hours_sentence(official: str) -> str:
+    for part in re.split(r"(?<=[.!])\s+", official):
+        if re.search(r"\d{1,2}:\d{2}", part):
+            return part.strip()
+    return ""
+
+
+def _operator_fallback(lang: str, official: str) -> str:
+    hours = _hours_sentence(official)
+    if hours:
+        return f"{_HANDOFF[lang]} {hours}"
+    return _HANDOFF[lang]
 
 
 def operator_requested(text: str) -> bool:
@@ -88,10 +107,15 @@ def compose(chat_id: str, text: str, *, rephrase=None, log=None) -> list[tuple[s
         full = resolve(text, chat_id=chat_id)
         lang = full["lang"] if full["lang"] in ("ru", "ky") else "ru"
         official = phrase(14, lang, "answer")
-        spoken = say(text, official, lang)
+        if say is gemini_rephrase:
+            spoken = gemini_rephrase(text, official, lang, note=_OPERATOR_NOTE)
+        else:
+            spoken = say(text, official, lang)
+        if spoken.strip() == official.strip():
+            spoken = _operator_fallback(lang, official)
         start_handoff(chat_id)
         set_topic(chat_id, 14)
-        return [(spoken, []), (_HANDOFF[lang], [])]
+        return [(spoken, [])]
 
     full = resolve(text, chat_id=chat_id)
     if full["mode"] != "direct":
@@ -100,9 +124,6 @@ def compose(chat_id: str, text: str, *, rephrase=None, log=None) -> list[tuple[s
     if full["mode"] == "direct" and full["faq_id"] is not None:
         message = say(text, message, full["lang"])
     return [(message, buttons)]
-
-
-_STATIC = {_HELLO, _RESET, *_REFUSE.values(), *_BUTTONS.values(), *_HANDOFF.values()}
 
 
 def _api(token: str, method: str, payload: dict | None = None, timeout: float = 15) -> dict:
@@ -117,52 +138,26 @@ def _api(token: str, method: str, payload: dict | None = None, timeout: float = 
         return json.loads(response.read().decode("utf-8"))
 
 
-def _send(token: str, chat_id: int | str, text: str, buttons: list[dict]) -> int | None:
+def _send(token: str, chat_id: int | str, text: str, buttons: list[dict]) -> None:
     payload: dict = {"chat_id": chat_id, "text": text}
     if buttons:
         payload["reply_markup"] = {"inline_keyboard": buttons}
-    result = _api(token, "sendMessage", payload, timeout=15)
-    return (result.get("result") or {}).get("message_id")
-
-
-def _should_rephrase(message: str, buttons: list, index: int) -> bool:
-    if index != 0 or buttons or message in _STATIC:
-        return False
-    return not (message.startswith("Не закрыто") or message.startswith("Неотвеченных"))
-
-
-def _deliver(token: str, chat_id: int, question: str, message: str, buttons: list, index: int) -> None:
-    message_id = _send(token, chat_id, message, buttons)
-    print("ответ отправлен", flush=True)
-    if not _should_rephrase(message, buttons, index) or not message_id:
-        return
-    rewritten = gemini_rephrase(question, message, detect_lang(question))
-    if not rewritten or rewritten == message:
-        return
-    try:
-        _api(
-            token,
-            "editMessageText",
-            {"chat_id": chat_id, "message_id": message_id, "text": rewritten},
-            timeout=15,
-        )
-        print("пересказ обновлён", flush=True)
-    except urllib.error.URLError as error:
-        print(f"пересказ не заменил сообщение: {error}", flush=True)
-
-
-def _official(question: str, official: str, lang: str) -> str:
-    return official
+    _api(token, "sendMessage", payload, timeout=15)
 
 
 def _handle_text(token: str, chat_id: int, text: str) -> None:
     print(f"вопрос: {text}", flush=True)
-    drafts = compose(str(chat_id), text, rephrase=_official)
+    drafts = compose(str(chat_id), text)
     if not drafts:
         print("бот молчит: диалог у оператора", flush=True)
         return
-    for index, (message, buttons) in enumerate(drafts):
-        _deliver(token, chat_id, text, message, buttons, index)
+    for message, buttons in drafts:
+        _send(token, chat_id, message, buttons)
+        if buttons:
+            labels = "; ".join(row[0]["text"] for row in buttons)
+            print(f"ответ: {message} | кнопки: {labels}", flush=True)
+        else:
+            print(f"ответ: {message}", flush=True)
 
 
 def _handle_callback(token: str, callback: dict) -> None:
@@ -185,7 +180,7 @@ def _handle_callback(token: str, callback: dict) -> None:
         return
     set_topic(str(chat_id), faq_id)
     official = phrase(faq_id, lang, "answer")
-    _deliver(token, int(chat_id), "", official, [], 0)
+    _send(token, chat_id, gemini_rephrase("", official, lang), [])
 
 
 def bot_username(token: str) -> str:

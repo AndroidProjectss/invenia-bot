@@ -16,6 +16,10 @@ class GeminiRephraseTest(unittest.TestCase):
     def test_extra_ussd_is_rejected(self):
         self.assertEqual(grounded(_OFFICIAL, "Наберите *102#."), _OFFICIAL)
 
+    def test_dropped_transfer_code_is_rejected(self):
+        source = "*145*номер*сумма#, комиссия 2%, от 10 до 5000 сом, лимит 10000 сом."
+        self.assertEqual(grounded(source, "Комиссия за перевод составляет 2%."), source)
+
     def test_same_facts_are_kept(self):
         rewritten = "Проверка баланса бесплатная: наберите *100#."
         self.assertEqual(grounded(_OFFICIAL, rewritten), rewritten)

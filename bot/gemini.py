@@ -13,6 +13,7 @@ from bot.envfile import load_dotenv
 _MODEL = "gemini-2.5-flash"
 _URL = f"https://generativelanguage.googleapis.com/v1beta/models/{_MODEL}:generateContent"
 _USSD = re.compile(r"\*\d[\d*]*#")
+_STAR = re.compile(r"\*\d+")
 _NUMBER = re.compile(r"\d+(?:[.,]\d+)?")
 
 
@@ -28,18 +29,25 @@ def grounded(source: str, rewritten: str) -> str:
         return source
     source_codes, source_numbers = _facts(source)
     new_codes, new_numbers = _facts(rewritten)
+    source_stars = set(_STAR.findall(source))
     if not new_codes <= source_codes or not new_numbers <= source_numbers:
+        return source
+    # Модель не имеет права выкинуть код *145 или число из официального текста.
+    if not source_stars <= set(_STAR.findall(rewritten)) or not source_numbers <= new_numbers:
         return source
     return rewritten
 
 
-def _prompt(question: str, official: str, lang: str) -> str:
+def _prompt(question: str, official: str, lang: str, note: str = "") -> str:
     language = "кыргызском" if lang == "ky" else "русском"
+    extra = f"{note}\n" if note else ""
     return (
         "Ответь абоненту как сотрудник поддержки: коротко, спокойно и по делу, на "
         f"{language} языке.\n"
         "Смысл, цены и коды бери только из официального текста. Ничего от себя не добавляй.\n"
-        "Не пиши про базу, FAQ и про то, что ты не выдумываешь. Верни только сам ответ.\n\n"
+        "Все числа, коды и лимиты из официального текста сохрани, ничего из них не выбрасывай.\n"
+        "Не пиши про базу, FAQ и про то, что ты не выдумываешь. Верни только сам ответ.\n"
+        f"{extra}\n"
         f"Вопрос абонента:\n{question}\n\n"
         f"Официальный текст:\n{official}"
     )
@@ -66,12 +74,12 @@ def _call(key: str, prompt: str) -> str:
         data=body,
         headers={"Content-Type": "application/json", "x-goog-api-key": key},
     )
-    with urllib.request.urlopen(request, timeout=4) as response:
+    with urllib.request.urlopen(request, timeout=12) as response:
         payload = json.loads(response.read().decode("utf-8"))
     return _text_from_payload(payload)
 
 
-def rephrase(question: str, official: str, lang: str, transport=None) -> str:
+def rephrase(question: str, official: str, lang: str, transport=None, note: str = "") -> str:
     """Без ключа, при ошибке сети и при лишнем факте возвращает official."""
     source = (official or "").strip()
     if not source:
@@ -86,7 +94,7 @@ def rephrase(question: str, official: str, lang: str, transport=None) -> str:
             return _call(key, prompt)
 
     try:
-        rewritten = transport(_prompt(question, source, lang))
+        rewritten = transport(_prompt(question, source, lang, note))
     except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError, ValueError):
         return source
     except Exception:

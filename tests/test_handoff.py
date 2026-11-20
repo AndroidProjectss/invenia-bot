@@ -23,9 +23,10 @@ class HandoffTest(unittest.TestCase):
         self.assertTrue(operator_requested("Позовите оператора"))
         self.assertTrue(operator_requested("operator"))
         messages = compose("live", "Позовите оператора", rephrase=_quiet, log=lambda *args: None)
-        self.assertEqual(len(messages), 2)
+        self.assertEqual(len(messages), 1)
         self.assertIn("оператор", messages[0][0].lower())
-        self.assertIn("/reset", messages[1][0])
+        self.assertIn("/reset", messages[0][0])
+        self.assertIn("09:00", messages[0][0])
         self.assertTrue(is_handed_off("live"))
 
         silent = compose("live", "А сколько стоит роуминг?", rephrase=_quiet, log=lambda *args: None)
