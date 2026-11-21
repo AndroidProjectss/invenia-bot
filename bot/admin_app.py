@@ -16,6 +16,7 @@ from bot.channels import download_whatsapp_media, send_channel, send_whatsapp
 from bot.media import UNREADABLE, question_from_file, whatsapp_attachment, MediaError
 from bot.corpus import ROOT
 from bot.rag import summary as rag_summary
+from bot.telegram_state import snapshot as telegram_snapshot
 from bot.service import process_incoming, select_faq
 from bot.storage import (
     add_message,
@@ -120,6 +121,7 @@ def create_app(test_config: dict | None = None) -> Flask:
             messages=messages,
             stats=dashboard_stats(),
             knowledge={**rag_summary(), "enabled": get_setting_bool("rag_enabled")},
+            telegram_receiver=telegram_snapshot(),
             filters={"status": status, "channel": channel, "q": query},
         )
 

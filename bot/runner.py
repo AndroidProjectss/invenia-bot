@@ -5,20 +5,26 @@ from __future__ import annotations
 import os
 import threading
 import traceback
+import time
 
 from bot.admin_app import _load_dotenv, run_admin
 
 
 def _run_telegram() -> None:
-    try:
-        from bot.telegram_bot import run_bot
+    from bot.telegram_bot import run_bot
+    from bot.telegram_state import report
 
-        run_bot()
-    except SystemExit as error:
-        print(f"Telegram остановлен: {error}")
-    except Exception:
-        print("Telegram-бот завершился с ошибкой:")
-        traceback.print_exc()
+    while True:
+        try:
+            report("starting", "Подключение к Telegram")
+            run_bot()
+        except (Exception, SystemExit) as error:
+            # Текст сетевого исключения может содержать URL с токеном.
+            report("error", f"Приёмник остановился ({type(error).__name__}), повтор через 5 секунд")
+            print(f"Telegram: {type(error).__name__}. Перезапуск через 5 секунд.", flush=True)
+        else:
+            report("restarting", "Приёмник завершился, перезапуск через 5 секунд")
+        time.sleep(5)
 
 
 def run_all() -> None:
@@ -37,6 +43,8 @@ def run_all() -> None:
         telegram.start()
         print("- Telegram-бот: включён")
     else:
+        from bot.telegram_state import report
+        report("disabled", "TELEGRAM_BOT_TOKEN не заполнен, приёмник не запущен")
         print("- Telegram-бот: пропущен, TELEGRAM_BOT_TOKEN не заполнен")
     print("Остановка всех сервисов: Ctrl+C")
 

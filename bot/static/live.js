@@ -17,7 +17,7 @@
         throw new Error('session');
       }
       const next = new DOMParser().parseFromString(await response.text(), 'text/html');
-      for (const selector of ['.stats', '.chat-list', '.conversation-head', '.messages']) {
+      for (const selector of ['.receiver-banner', '.stats', '.chat-list', '.conversation-head', '.messages']) {
         const current = document.querySelector(selector);
         const incoming = next.querySelector(selector);
         if (!current || !incoming || (current.dataset.serverHtml || current.innerHTML) === incoming.innerHTML) continue;
@@ -25,13 +25,14 @@
         const atBottom = current.scrollHeight - current.clientHeight - top < 80;
         const openDetails = [...current.querySelectorAll('details')].map((detail,index)=>detail.open?index:-1);
         current.innerHTML = incoming.innerHTML;
+        if (selector === '.receiver-banner') current.className = incoming.className;
         current.dataset.serverHtml = incoming.innerHTML;
         current.querySelectorAll('details').forEach((detail,index)=>{detail.open=openDetails.includes(index);});
         current.scrollTop = selector === '.messages' && atBottom ? current.scrollHeight : top;
       }
       // Первый чат появился после открытия пустой панели.
       if (!document.querySelector('.reply') && next.querySelector('.reply')) location.reload();
-      status.textContent = '● На связи';
+      status.textContent = '● Админка на связи';
       document.dispatchEvent(new Event('invenia:updated'));
     } catch (_) {
       status.textContent = '● Нет обновлений — повторяем';

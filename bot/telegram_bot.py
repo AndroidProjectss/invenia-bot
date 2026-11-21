@@ -26,6 +26,7 @@ from bot.media import UNREADABLE, question_from_file, telegram_attachment, bound
 from bot.service import process_incoming, select_faq
 from bot.stats import log_unanswered, summary
 from bot.storage import add_message, ensure_chat, update_chat
+from bot.telegram_state import report as report_receiver
 from bot.textutil import basic_normalize
 
 _REFUSE = {
@@ -312,18 +313,33 @@ def run_bot() -> None:
         )
     try:
         username = bot_username(token)
-    except (urllib.error.URLError, RuntimeError, json.JSONDecodeError) as error:
-        raise SystemExit(f"Telegram не ответил на getMe: {error}") from error
+        webhook = _api(token, "getWebhookInfo")
+        if (webhook.get("result") or {}).get("url"):
+            report_receiver("webhook", "У бота включён webhook: getUpdates недоступен. Отключите webhook или выберите один способ приёма.")
+            time.sleep(30)
+            return
+    except (urllib.error.URLError, RuntimeError, json.JSONDecodeError, TimeoutError, OSError) as error:
+        raise SystemExit(f"Ошибка подключения к Telegram ({type(error).__name__})") from None
     offset = 0
     print(f"Бот @{username} слушает Telegram. Остановка: Ctrl+C.", flush=True)
     while True:
         try:
-            payload = _api(token, "getUpdates", {"timeout": 10, "offset": offset}, timeout=20)
+            report_receiver("polling", f"@{username}: приём сообщений включён")
+            payload = _api(token, "getUpdates", {"timeout": 10, "offset": offset,
+                           "allowed_updates": ["message", "callback_query"]}, timeout=20)
         except KeyboardInterrupt:
             print("Остановка.", flush=True)
             return
-        except urllib.error.URLError as error:
-            print(f"Сеть Telegram недоступна: {error}", flush=True)
+        except urllib.error.HTTPError as error:
+            detail = ("Конфликт 409: проверьте webhook и второй экземпляр бота с тем же токеном"
+                      if error.code == 409 else f"Telegram API: HTTP {error.code}")
+            report_receiver("error", detail)
+            print(detail, flush=True)
+            time.sleep(5)
+            continue
+        except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as error:
+            report_receiver("error", f"Ошибка сети ({type(error).__name__}), повтор подключения")
+            print(f"Сеть Telegram недоступна: {type(error).__name__}", flush=True)
             time.sleep(2)
             continue
         if not payload.get("ok", False):
@@ -331,6 +347,7 @@ def run_bot() -> None:
             time.sleep(2)
             continue
         for update in payload.get("result", []):
+            report_receiver("processing", "Получено сообщение Telegram")
             offset = int(update["update_id"]) + 1
             try:
                 if "message" in update:
