@@ -16,6 +16,7 @@ from bot.channels import download_whatsapp_media, send_channel, send_whatsapp
 from bot.media import UNREADABLE, question_from_file, whatsapp_attachment, MediaError
 from bot.corpus import ROOT
 from bot.rag import summary as rag_summary
+from bot.analytics import build_analytics
 from bot.telegram_state import snapshot as telegram_snapshot
 from bot.service import process_incoming, select_faq
 from bot.storage import (
@@ -124,6 +125,18 @@ def create_app(test_config: dict | None = None) -> Flask:
             telegram_receiver=telegram_snapshot(),
             filters={"status": status, "channel": channel, "q": query},
         )
+
+    @app.get("/analytics")
+    @login_required
+    def analytics():
+        period = request.args.get("period", "7")
+        if period not in {"1", "7", "30", "all"}:
+            period = "7"
+        channel = request.args.get("channel", "")
+        if channel not in {"telegram", "whatsapp"}:
+            channel = ""
+        return render_template("analytics.html", analytics=build_analytics(
+            days=0 if period == "all" else int(period), channel=channel), period=period, channel=channel)
 
     @app.post("/settings/knowledge-base")
     @login_required
